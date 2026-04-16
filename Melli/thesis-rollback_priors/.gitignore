@@ -1,0 +1,15 @@
+*.nii.gz
+*.png
+*.bin
+*.mat
+*.txt
+*.csv
+*.nii
+*.pyc
+*.json
+*.dcm
+*.pt
+*.nrb
+*.npy
+*.log
+*.IMA

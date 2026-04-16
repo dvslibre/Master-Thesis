@@ -1,0 +1,148 @@
+# Konfiguration für SPECT-ähnliches Emissions-NeRF aus AP/PA + CT
+
+expname: spect_emission
+data:
+  type: spect                                   # Neuer Datensatz-Typ, der in graf/config.py → get_data() abgefragt wird
+  manifest: data/manifest.csv                   # Manifest mit Spalten: patient_id, ap_path, pa_path, ct_path
+  imsize: 128                                   # Zielbildgröße nach ggf. Resize (an deine Daten anpassen)
+  white_bkgd: False                             # Bei Szinti i.d.R. kein "weißer Hintergrund" wie bei DRRs nötig
+  fixed_poses: ap_pa
+
+  # Projektionsgeometrie
+  orthographic: True                            # Für SPECT-ähnliche planare Szintigraphie parallelbeam:
+  far: 1.0                                      # near/far definieren den normierten Tiefenbereich im NeRF-Raum --> für den Anfang hier [0,1] annehmen und später aus der CT-BBox ableiten.
+  near: 0.0
+
+  # Fester Ray-Split für Train/Test (reproduzierbar via globalem Seed)
+  ray_split_ratio: 0.8                          # Anteil der Rays pro View für das Training (Rest = Test)
+
+  act_scale: 1.0                                # globaler λ-Faktor (keine Normierung; für konsistente Skalen zu Projekten anpassen)
+
+
+  # radius & fov sind bei orthographic nicht so wichtig, können aber gesetzt bleiben
+  radius: 0.5                                   # grob: halbe Volumen-Ausdehnung
+  fov: 60.0                                     # wird bei orthographic kaum genutzt
+
+  # Keine Zufalls-Augmentation bei medizinischen Daten
+  augmentation: False
+
+  # Für feste AP/PA-Posen unbenutzt, aber der Vollständigkeit halber
+  umin: 0.0
+  umax: 0.0
+  vmin: 0.0
+  vmax: 0.0
+
+nerf:
+  i_embed: 0                                    # Standard-Positional-Encoding
+
+  # Emission ist (idealisiert) isotrop → Viewdirs eher nicht nötig
+  use_viewdirs: False
+  use_attenuation: True                         # aktiviert CT-basierte Schwächung im Forward-Modell
+  attenuation_debug: False                      # falls True: logge λ/μ/T für einen Beispielstrahl
+  atten_scale: 38.4                             # globaler Längenskalenfaktor für ∫ μ ds
+  multires: 10
+  multires_views: 0                             # wird bei use_viewdirs=False sowieso ignoriert
+
+  # Sampling entlang der Strahlen
+  # Increased depth sampling to reduce discretization-induced lamella artifacts.
+  N_samples: 96                                 # eig. 128, aber für schnelles Training erstmal runter
+  N_importance: 0                             # aktiviert hierarchisches Fine-Sampling mit höherer Auflösung
+
+  # MLP-Größe
+  netdepth: 8
+  netwidth: 256
+  netdepth_fine: 8
+  netwidth_fine: 256
+
+  # Kein Jitter → deterministische Rays (ist zum Debuggen angenehmer)
+  perturb: 1
+
+  # Rauschen direkt in den NeRF-Rohwerten anfänglich nicht
+  raw_noise_std: 0.0
+  decrease_noise: False
+
+# Latenter Code aus dem GAN-Setup → wird in train_emission.py nicht verwendet (aber erstmal drin lassen)
+z_dist:
+  type: gauss
+  dim: 256
+  dim_appearance: 128
+
+# Ray-Sampler aus dem Patch-GAN-Setup; für Full-Image-Sampling
+# wird in eigenem Code in graf/transforms.py geschrieben.
+# Belassen bei neutralen Werten, damit nichts crasht, falls noch irgendwo gelesen.
+ray_sampler:
+  min_scale: 1.0
+  max_scale: 1.0
+  scale_anneal: -1.0          # <0 ⇒ keine Annealing-Logik
+  N_samples: 0                # nicht per Patchsampler samplen
+
+# Discriminator-Konfiguration bleibt als Platzhalter, wird aber nicht genutzt.
+discriminator:
+  ndf: 64
+  hflip: False
+
+training:
+  # Wohin alles geschrieben wird
+  outdir: ./results_spect
+  model_file: model_spect.pt
+  monitoring: tensorboard
+
+  # Kein AMP für den Anfang (Numerik einfacher zu debuggen)
+  use_amp: False
+
+  # DataLoader / Batching
+  nworkers: 4
+  batch_size: 1               # pro Patient / Fall
+
+  # Wie viele Rays pro Forward-Pass (Speicherlimit)
+  # später ggf. verfeinern; kleinere Werte = weniger VRAM, langsamer.
+  chunk: 8192                 # eig. wars 32768
+  netchunk: 16384             # eig. wars 65536
+  tv_weight: 0.001            # Gewicht für 1D-TV-Regularisierung entlang der Rays
+  tv_weight_mu: 0.0           # zusätzlicher TV-Gewichtungsfaktor für CT-gewichtete TV (edge-aware)
+  tv_mu_sigma: 1.0            # Skalenparameter für μ-Differenzen im edge-aware TV-Weighting
+  mu_gate_weight: 0.0         # Gewicht für μ-basierten Emissions-Prior (0 = aus)
+  mu_gate_mode: none          # none|bandpass|lowpass|highpass
+  mu_gate_center: 0.2         # Zentrum der bevorzugten μ-Region
+  mu_gate_width: 0.1          # Breite/Toleranz der bevorzugten μ-Region
+  tv3d_weight: 0.0            # 3D-TV über ein Hilfsgitter (Stub, 0 = aus)
+  tv3d_grid_size: 32          # Gittergröße für 3D-TV-Stub
+  act_samples: 16384          # Anzahl Voxel-Samples für den ACT-Loss
+  act_pos_weight: 2.0         # Gewichtung für ACT>0 Samples im ACT-Loss
+
+  # Optimierung (nur Generator, weil kein GAN)
+  lr_g: 0.00025
+  lr_d: 0.0                   # unbenutzt
+  lr_anneal: 1.0              # 1.0 ⇒ keine Annealing-Wirkung
+  lr_anneal_every: []         # leere Liste = keine geplanten Drop-Punkte
+  val_interval: 0             # 0 = keine periodische Val-Evaluation
+
+  equalize_lr: False
+  gan_type: none
+  reg_type: none
+  reg_param: 0.0
+  aug_policy: none
+
+  optimizer: adam             
+
+  # EMA & Style-GAN-Features vorerst ignorieren
+  n_test_samples_with_same_shape_code: 1
+  take_model_average: false
+  model_average_beta: 0.999
+  model_average_reinit: false
+
+  # keine automatischen Neustarts
+  restart_every: -1
+
+  # Speicherkriterien → selbst definieren, was "best" heißt
+  save_best: recon_loss       # Hinweis: muss man im Code selber auswerten
+  fid_every: 0                # FID nicht nötig
+
+  # Logging & Checkpoints
+  print_every: 10
+  sample_every: 0             # keine Auto-Samples
+  save_every: 500
+  backup_every: 0
+  video_every: 0
+  val_interval: 200           # alle N Schritte Test-Split evaluieren (<=0: deaktiviert)
+  tv_weight: 0.001            # Gewicht für 1D-TV entlang der Rays

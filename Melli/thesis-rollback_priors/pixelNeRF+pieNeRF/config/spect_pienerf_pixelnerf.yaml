@@ -1,0 +1,13 @@
+model:
+  encoder: ct_pixelnerf
+  mlp: pie_mlp_cond
+
+training:
+  batch_size: null  # TODO: set batch size
+  lr: null          # TODO: set learning rate
+  epochs: null      # TODO: set number of epochs
+
+data:
+  path_ct: ""  # TODO: path to CT volumes
+  path_ap: ""  # TODO: path to AP projections
+  path_pa: ""  # TODO: path to PA projections

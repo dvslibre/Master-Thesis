@@ -1,0 +1,222 @@
+# ============================================================
+# pieNeRF – SPECT-ähnliches Emissions-NeRF (AP/PA + CT, optional ACT supervision)
+# Multi-phantom via patient_id split (train/val/test disjunkt).
+#
+# WICHTIG:
+# - Projection-Loss (AP/PA) ist immer aktiv (Training + Val/Test).
+# - ACT-Loss soll NUR im Training wirken (Supervision), Val/Test bleiben projektionsbasiert.
+# - imsize: null => native Auflösung, keine Resize-Pipeline.
+#
+# ANISOTROP / PHYSIK:
+# - Wir benutzen eine anisotrope Weltbox (rx, ry, rz) in cm, abgeleitet aus voxel_mm und (W,H,D).
+# - Wenn auto_near_far_from_radius=true, wird near/far (im Code) auf physikalische cm gesetzt:
+#   near=0, far=2*rz.
+# - In dem Fall sollte atten_scale NICHT nochmal die Pfadlänge "reinmultiplizieren".
+#   => Für physikalisch plausibles Attenuation-Integral: atten_scale = 1.0.
+# ============================================================
+
+expname: spect_emission
+
+data:
+  # -------- Dataset ----------
+  type: spect
+  manifest: data/manifest_abs.csv
+  imsize: null                 # null => no resize (native resolution)
+  white_bkgd: false
+  fixed_poses: ap_pa           # feste AP/PA-Posen
+
+  # -------- Projektionsgeometrie ----------
+  orthographic: true           # Parallelbeam / planare Szintigraphie
+  # near/far werden bei auto_near_far_from_radius im Code überschrieben (cm-world):
+  near: 0.0
+  far: 1.0
+
+  # -------- Intra-phantom Pixel/Ray split ----------
+  # Das ist NICHT der Phantom-Split, sondern nur ein subset split innerhalb einer Projektion.
+  # Wird für subset-eval / debug genutzt.
+  ray_split_ratio: 0.8
+
+  # -------- ACT scaling ----------
+  # globaler Skalenfaktor für ACT, falls du z.B. Einheit/Skalierung anpassen willst.
+  act_scale: 1.0
+  # Datenquelle für den Encoder-Input: counts (roh) oder normalized (p99.9-normalisiert)
+  proj_input_source: counts
+
+  # -------- Phantom-Split (patient_id disjunkt) ----------
+  split_by_patient_id: true
+  split_seed: 0
+  split_mode: counts           # counts ist robust bei kleinen N (wie bei dir)
+
+
+  split_train_count: 16
+  split_val_count: 1
+  split_test_count: 3
+
+  # -------- NeRF Raum-Parameter ----------
+  # radius/fov bleiben als Legacy/Default drin; bei anisotropem Setup ist radius_xyz_cm maßgeblich.
+  radius: 0.5
+  fov: 60.0
+
+  # -------- Anisotrope Weltbox / physikalische Größe ----------
+  voxel_mm: 1.5                  # Voxelkante in Millimetern (physikalisch isotrop)
+  use_anisotropic_radius: true
+  # aus (W,H,D)=(651,256,256) und 1.5mm → halbe Extents in cm:
+  # x (W): 651*1.5mm = 976.5mm = 97.65cm => rx=48.825
+  # y (H): 256*1.5mm = 384mm   = 38.4cm  => ry=19.2
+  # z (D): 256*1.5mm = 384mm   = 38.4cm  => rz=19.2
+  radius_xyz_cm: [48.825, 19.2, 19.2]
+  auto_near_far_from_radius: true
+
+  # -------- Augmentation ----------
+  augmentation: false            # medizinisch: erstmal aus
+
+  # -------- Platzhalter / unbenutzt bei fixed poses ----------
+  umin: 0.0
+  umax: 0.0
+  vmin: 0.0
+  vmax: 0.0
+
+
+nerf:
+  # -------- Encoding ----------
+  i_embed: 0
+  multires: 10
+  multires_views: 0
+
+  # -------- Viewdirs ----------
+  use_viewdirs: false            # Emission idealisiert isotrop
+
+  # -------- Attenuation via CT ----------
+  use_attenuation: true
+  attenuation_debug: false
+  # WICHTIG: bei physikalischer cm-world (near/far=0..2*rz) atten_scale auf 1.0 setzen,
+  # sonst skaliert ihr die Schwächung (Pfadlänge) doppelt.
+  atten_scale: 1.0
+
+  # -------- Sampling entlang Strahl ----------
+  N_samples: 96
+  N_importance: 0                # 0 => kein Fine-Sampling
+
+  # -------- MLP Größe ----------
+  netdepth: 8
+  netwidth: 256
+  netdepth_fine: 8
+  netwidth_fine: 256
+
+  # -------- Stratified sampling ----------
+  perturb: 1                     # 1 => jitter (default), 0 => deterministisch
+
+  # -------- Noise ----------
+  raw_noise_std: 0.0
+  decrease_noise: false
+
+
+# Latenter Code aus altem Setup – bleibt als Platzhalter (nicht zentral genutzt)
+z_dist:
+  type: gauss
+  dim: 256
+  dim_appearance: 128
+
+
+# Patch ray sampler (hier nicht genutzt)
+ray_sampler:
+  min_scale: 1.0
+  max_scale: 1.0
+  scale_anneal: -1.0
+  N_samples: 0
+
+
+# Discriminator placeholder (nicht genutzt)
+discriminator:
+  ndf: 64
+  hflip: false
+
+
+training:
+  # -------- Output / Logging ----------
+  outdir: ./results_spect
+  model_file: model_spect.pt
+  monitoring: tensorboard
+
+  # -------- Precision ----------
+  use_amp: false
+
+  # -------- DataLoader ----------
+  nworkers: 4
+  batch_size: 1                  # pro Patient / Phantom ein Batch
+
+  # -------- Memory/Speed ----------
+  chunk: 8192
+  netchunk: 16384
+
+  # -------- Regularisierung ----------
+  tv_weight: 0.001
+
+  # optional edge-aware TV / mu-gating (derzeit aus)
+  tv_weight_mu: 0.0
+  tv_mu_sigma: 1.0
+  mu_gate_weight: 0.0
+  mu_gate_mode: none
+  mu_gate_center: 0.2
+  mu_gate_width: 0.1
+
+  # optional 3D-TV stub
+  tv3d_weight: 0.0
+  tv3d_grid_size: 32
+
+  # -------- Projection loss (AP/PA) ----------
+  # Projection-Loss ist (per Code/CLI) aktiv (Training + Val/Test).
+  # Falls eure YAML diese keys unterstützt, könnt ihr sie hier setzen (optional):
+  # proj_loss_type: poisson
+  # proj_target_source: counts
+  # proj_loss_weight: 0.1
+  # proj_warmup_steps: 0
+
+  # -------- ACT supervision (TRAIN ONLY) ----------
+  act_loss_weight: 0.1           # TRAIN-only ACT supervision (val/test bleiben projektionsbasiert)
+  act_samples: 16384
+  act_pos_weight: 2.0
+  act_pos_fraction: 0.5
+  act_pos_threshold: 1.0e-8
+
+  # -------- CT supervision (derzeit aus) ----------
+  ct_loss_weight: 0.0
+  ct_threshold: 0.05
+
+  # -------- Optimizer ----------
+  optimizer: adam
+  lr_g: 0.00025
+  lr_d: 0.0
+  lr_anneal: 1.0
+  lr_anneal_every: []
+
+  # -------- Validation / Test ----------
+  # Für "echte" Läufe würde ich val_interval wieder auf 200 setzen.
+  # val_interval=1 ist ok für Debug/Smoke-Tests, aber kostet Zeit/IO.
+  val_interval: 200
+  debug_eval_flow: false
+  run_final_test: true
+
+  # -------- Optional / legacy ----------
+  equalize_lr: false
+  gan_type: none
+  reg_type: none
+  reg_param: 0.0
+  aug_policy: none
+
+  # EMA / averaging (aus)
+  n_test_samples_with_same_shape_code: 1
+  take_model_average: false
+  model_average_beta: 0.999
+  model_average_reinit: false
+
+  restart_every: -1
+
+  # -------- Saving / Checkpoints ----------
+  save_best: recon_loss
+  fid_every: 0
+  print_every: 10
+  sample_every: 0
+  save_every: 500
+  backup_every: 0
+  video_every: 0

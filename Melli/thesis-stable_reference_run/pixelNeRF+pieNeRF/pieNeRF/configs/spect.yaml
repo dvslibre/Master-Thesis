@@ -1,0 +1,127 @@
+# Konfiguration für SPECT-ähnliches Emissions-NeRF aus AP/PA + CT (erstmal OHNE GAN)
+
+expname: spect_emission
+data:
+  type: spect                                   # Neuer Datensatz-Typ, der in graf/config.py → get_data() abgefragt wird
+  manifest: data/manifest.csv             # Manifest mit Spalten: patient_id, ap_path, pa_path, ct_path
+  imsize: 128                                   # Zielbildgröße nach ggf. Resize (an deine Daten anpassen)
+  white_bkgd: False                             # Bei Szinti i.d.R. kein "weißer Hintergrund" wie bei DRRs nötig
+  fixed_poses: ap_pa
+
+  # Projektionsgeometrie
+  orthographic: True                            # Für SPECT-ähnliche planare Szintigraphie meistens parallelbeam:
+  far: 1.0                                      # near/far definieren den normierten Tiefenbereich im NeRF-Raum --> für den Anfang hier [0,1] annehmen und später aus der CT-BBox ableiten.
+  near: 0.0
+
+
+  # radius & fov sind bei orthographic nicht so wichtig, können aber gesetzt bleiben
+  radius: 0.5                                   # grob: halbe Volumen-Ausdehnung
+  fov: 60.0                                     # wird bei orthographic kaum genutzt
+
+  # Keine Zufalls-Augmentation bei medizinischen Daten
+  augmentation: False
+
+  # Für deine festen AP/PA-Posen unbenutzt, aber der Vollständigkeit halber
+  umin: 0.0
+  umax: 0.0
+  vmin: 0.0
+  vmax: 0.0
+
+nerf:
+  i_embed: 0                                    # Standard-Positional-Encoding
+
+  # Emission ist (idealisiert) isotrop → Viewdirs eher nicht nötig
+  use_viewdirs: False
+  use_attenuation: True                         # aktiviert CT-basierte Schwächung im Forward-Modell
+  attenuation_debug: False                      # falls True: logge λ/μ/T für einen Beispielstrahl
+  multires: 10
+  multires_views: 0           # wird bei use_viewdirs=False sowieso ignoriert
+
+  # Sampling entlang der Strahlen
+  N_samples: 32               # eig. 128, aber für schnelles Training erstmal runter
+  N_importance: 0             # kein hierarchisches Fine-Sampling für den Anfang
+
+  # MLP-Größe
+  netdepth: 8
+  netwidth: 256
+  netdepth_fine: 8
+  netwidth_fine: 256
+
+  # Kein Jitter → deterministische Rays (ist zum Debuggen angenehmer)
+  perturb: 0.0
+
+  # Rauschen direkt in den NeRF-Rohwerten brauchst du anfänglich nicht
+  raw_noise_std: 0.0
+  decrease_noise: False
+
+# Latenter Code aus dem GAN-Setup → wird in train_emission.py nicht verwendet (aber erstmal drin lassen)
+z_dist:
+  type: gauss
+  dim: 256
+  dim_appearance: 128
+
+# Ray-Sampler aus dem Patch-GAN-Setup; für Full-Image-Sampling
+# wird wahrscheinlich in eigenem Code in graf/transforms.py geschrieben.
+# Belassen bei neutralen Werten, damit nichts crasht, falls noch irgendwo gelesen.
+ray_sampler:
+  min_scale: 1.0
+  max_scale: 1.0
+  scale_anneal: -1.0          # <0 ⇒ keine Annealing-Logik
+  N_samples: 0                # nicht per Patchsampler samplen
+
+# Discriminator-Konfiguration bleibt als Platzhalter, wird aber nicht genutzt.
+discriminator:
+  ndf: 64
+  hflip: False
+
+training:
+  # Wohin alles geschrieben wird
+  outdir: ./results_spect
+  model_file: model_spect.pt
+  monitoring: tensorboard
+
+  # Kein AMP für den Anfang (Numerik einfacher zu debuggen)
+  use_amp: False
+
+  # DataLoader / Batching
+  nworkers: 4
+  batch_size: 1               # pro Patient / Fall
+
+  # Wie viele Rays pro Forward-Pass (Speicherlimit)
+  # Kannst du später verfeinern; kleinere Werte = weniger VRAM, langsamer.
+  chunk: 8192                 # eig. wars 32768
+  netchunk: 16384             # eig. wars 65536
+
+  # Optimierung (nur Generator, weil kein GAN)
+  lr_g: 0.0005
+  lr_d: 0.0                   # unbenutzt
+  lr_anneal: 1.0              # 1.0 ⇒ keine Annealing-Wirkung
+  lr_anneal_every: []         # leere Liste = keine geplanten Drop-Punkte
+
+  equalize_lr: False
+  gan_type: none
+  reg_type: none
+  reg_param: 0.0
+  aug_policy: none
+
+  optimizer: adam             
+
+  # EMA & Style-GAN-Features kannst du vorerst ignorieren
+  n_test_samples_with_same_shape_code: 1
+  take_model_average: false
+  model_average_beta: 0.999
+  model_average_reinit: false
+
+  # keine automatischen Neustarts
+  restart_every: -1
+
+  # Speicherkriterien → selbst definieren, was "best" heißt
+  save_best: recon_loss       # Hinweis: muss man im Code selber auswerten
+  fid_every: 0                # FID nicht nötig
+
+  # Logging & Checkpoints
+  print_every: 10
+  sample_every: 0             # keine Auto-Samples
+  save_every: 500
+  backup_every: 0
+  video_every: 0
